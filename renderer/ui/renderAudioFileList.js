@@ -118,10 +118,22 @@ document.addEventListener('mousemove', (event) => {
 })
 
 // release drag action when the mouseup event occurs
-document.addEventListener('mouseup', () => {
+document.addEventListener('mouseup', (event) => {
   window.draggingTabulatorRow = false
   document.body.classList.remove('copyCursor')
-  document.querySelector('.draggingAudioFilesOverPlaylist')?.classList.remove('draggingAudioFilesOverPlaylist')
+  if (document.querySelector('.draggingAudioFilesOverPlaylist')) {
+    // animate the drop effect
+    const hoveredElement = document.elementFromPoint(event.clientX, event.clientY)
+    window.setTimeout(() => {
+      hoveredElement.querySelector('img').style.transform = 'scale(1.1)'
+      hoveredElement.querySelector('span').style.transform = 'scale(1.1)'
+      window.setTimeout(() => {
+        hoveredElement.querySelector('img').style.transform = 'scale(1)'
+        hoveredElement.querySelector('span').style.transform = 'scale(1)'
+      }, 180)
+    }, 180)
+    document.querySelector('.draggingAudioFilesOverPlaylist')?.classList.remove('draggingAudioFilesOverPlaylist')
+  }
 })
 
 // resize tabulator table when the window resizes

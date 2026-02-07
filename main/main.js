@@ -1,14 +1,11 @@
 // this file is the main (node.js) process of the app
-const { app, protocol, net, shell, dialog, BrowserWindow, ipcMain, systemPreferences, globalShortcut } = require('electron')
+const { app, protocol, net, shell, dialog, BrowserWindow, ipcMain, systemPreferences, nativeTheme, globalShortcut } = require('electron')
 const path = require('path')
 const url = require('url')
 
 // set global variables that will be defined later
 let mainWindow
 let store
-
-// get system preferences
-const accentColor = systemPreferences.getAccentColor()
 
 // create main window
 async function createWindow () {
@@ -78,7 +75,12 @@ async function createWindow () {
   })
 
   // send accent color to renderer and inject as a css variable
-  mainWindow.webContents.on('did-finish-load', () => mainWindow.webContents.send('setAccentColor', `#${accentColor}`))
+  mainWindow.webContents.on('did-finish-load', () => mainWindow.webContents.send('setAccentColor', `#${systemPreferences.getAccentColor()}`))
+
+  // handle the OS changing the accent color
+  nativeTheme.on('updated', () => {
+    mainWindow.webContents.send('setAccentColor', `#${systemPreferences.getAccentColor()}`)
+  })
 
   // handle OS media keys
   globalShortcut.register('MediaPlayPause', () => mainWindow.webContents.send('mediaPlayPause'))
