@@ -1,5 +1,5 @@
 // handles native context menus
-const { dialog, ipcMain } = require('electron')
+const { dialog, ipcMain, shell } = require('electron')
 const mainWindow = global.mainWindow
 const db = global.db
 let menu = [] // gets reset every context menu invocation
@@ -25,11 +25,13 @@ module.exports = async () => {
           }
           case 'libraryAudioFile': {
             removeFromLibrary()
+            showInFileBrowser()
             return menu
           }
           case 'playlistAudioFile': {
             removeFromPlaylist()
             removeFromLibrary()
+            showInFileBrowser()
             return menu
           }
           default: return []
@@ -130,6 +132,16 @@ function removeFromLibrary () {
   }
   if (global.contextMenuUIContext.selectedFiles.length > 1) menu.push({ label: 'Remove files from library', click: deleteFiles })
   else menu.push({ label: 'Remove file from library', click: deleteFiles })
+}
+
+function showInFileBrowser () {
+  const show = async () => {
+    shell.showItemInFolder(global.contextMenuUIContext.selectedFiles[0])
+  }
+  if (global.contextMenuUIContext.selectedFiles.length === 1) {
+    menu.push({ type: 'separator' })
+    menu.push({ label: 'Show in file browser', click: show }) // only show if a single file is selected
+  }
 }
 
 // handle context menu calls from renderer

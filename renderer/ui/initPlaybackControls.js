@@ -235,6 +235,8 @@ window.playAudioFile = async function (file, via, gapless) {
   window.previousFile = window.currentFile
   window.currentFile = file
 
+  showPlaybackNotification(file)
+
   if (via !== 'history') {
     // add old file to history
     if (window.previousFile) window.playHistory.push(window.previousFile)
@@ -256,6 +258,61 @@ window.playAudioFile = async function (file, via, gapless) {
   if (!gapless) await loadFile(file)
   else file = await preloadNextFile()
   queueAudio(file)
+}
+
+async function showPlaybackNotification (file) {
+  if (!('Notification' in window)) return
+
+  // wait for metadata to be available (up to 5s)
+  const waitForMetadata = async () => {
+    const timeoutMs = 5000
+    const start = Date.now()
+    while (!window.fileCaches[file]?.metadata && Date.now() - start < timeoutMs) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    return window.fileCaches[file]?.metadata
+  }
+
+  const show = (metadata) => {
+    let performers = metadata.performers
+    if (performers) performers = performers.join(' / ')
+    else performers = '[unknown artist]'
+    const title = metadata.title || '[untitled]'
+    const artist = performers
+
+    const album = metadata.album
+    let body
+    if (album) {
+      body = `${artist} — ${album}`
+    } else {
+      body = `${artist}`
+    }
+    const artwork = metadata.pictures?.[0]
+    const icon = artwork ? `data:${artwork.mimeType};base64,${artwork.data}` : undefined
+
+    try {
+      const notification = new window.Notification(title, { body, icon })
+      notification.onclick = () => {
+        window.electron?.focus?.()
+      }
+    } catch (e) {
+      // ignore notification errors
+    }
+  }
+
+  const maybeShow = async () => {
+    const metadata = await waitForMetadata()
+    if (metadata) show(metadata)
+  }
+
+  if (window.Notification.permission === 'granted') {
+    await maybeShow()
+  } else if (window.Notification.permission !== 'denied' && !window._notificationPermissionRequested) {
+    window._notificationPermissionRequested = true
+    window.Notification.requestPermission().then((permission) => {
+      if (permission === 'granted') maybeShow()
+    }).catch(() => {})
+  }
 }
 
 // loads the binary data for the file into memory

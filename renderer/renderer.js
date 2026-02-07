@@ -103,6 +103,7 @@ async function init () {
         if (!titleAttribute.getAttribute('data-tippy-skip')) {
           if (titleAttribute.getAttribute('title') === 'Clear field') return // skip semantic forms clear fields
           window.tippy(titleAttribute, {
+            delay: 500,
             content: titleAttribute.getAttribute('title'), // extract tooltip content from html title attribute
             placement: titleAttribute.getAttribute('data-tippy-placement') || 'top' // allow html elements to customize tooltip placement
           })

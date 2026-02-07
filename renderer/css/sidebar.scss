@@ -99,8 +99,13 @@ nav#sidebar {
     button#audioLibraryPlaylist, button.playlistButton {
       display: flex;
 
+      img {
+        transition: transform 180ms;
+      }
+
       span {
         margin-left: 5px;
+        transition: transform 180ms;
       }
     }
 
