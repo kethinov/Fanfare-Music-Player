@@ -40,7 +40,7 @@ module.exports = () => {
     if (!window.onManualPlayQueueChangeDebounce) {
       window.onManualPlayQueueChangeDebounce = true
       window.setTimeout(() => {
-        updateQueue('manualPlayQueue')
+        renderQueue('manualPlayQueue')
         window.onManualPlayQueueChangeDebounce = false
       }, 1000)
     }
@@ -61,7 +61,7 @@ module.exports = () => {
     if (!window.onAutomaticPlayQueueChangeDebounce) {
       window.onAutomaticPlayQueueChangeDebounce = true
       window.setTimeout(() => {
-        updateQueue('automaticPlayQueue')
+        renderQueue('automaticPlayQueue')
         window.onAutomaticPlayQueueChangeDebounce = false
       }, 1000)
     }
@@ -83,7 +83,7 @@ module.exports = () => {
     if (!window.onPlayHistoryChangeDebounce) {
       window.onPlayHistoryChangeDebounce = true
       window.setTimeout(() => {
-        updateQueue('playHistory')
+        renderQueue('playHistory')
         window.onPlayHistoryChangeDebounce = false
       }, 1000)
     }
@@ -225,6 +225,20 @@ window.playAudioFile = async function (file, via, gapless) {
     document.getElementById('seekBar').disabled = false
     document.getElementById('seekBar').value = 0
     stopPlayback()
+
+    // stop preloading the previous queue
+    if (window.preloading) {
+      window.stopPreloading = true
+      // await until stopPreloading is no longer true, then continue
+      await new Promise(resolve => {
+        const interval = setInterval(() => {
+          if (!window.stopPreloading) {
+            clearInterval(interval)
+            resolve()
+          }
+        }, 50)
+      })
+    }
   }
 
   window.userPressedPlay = true
@@ -255,8 +269,13 @@ window.playAudioFile = async function (file, via, gapless) {
     }
   }
 
-  if (!gapless) await loadFile(file)
-  else file = await preloadNextFile()
+  if (!gapless) {
+    if (!window.fileCaches[file]?.audioBuffer) {
+      await loadFile(file)
+    }
+  } else {
+    file = await preloadNextFile()
+  }
   queueAudio(file)
 }
 
@@ -443,8 +462,7 @@ async function loadFile (file) {
         if (file === window.currentFile) {
           updateAlbumArt()
         }
-        updateQueue('manualPlayQueue')
-        updateQueue('automaticPlayQueue')
+        updateQueueMetadata(file)
       }
     )
   }
@@ -554,11 +572,13 @@ async function preloadNextFile () {
   else if (window.manualPlayQueue[0]) nextFile = window.manualPlayQueue[0] // play next file in the manual queue if any exist
   else if (window.automaticPlayQueue[0]) nextFile = window.automaticPlayQueue[0] // play next file in the automatic queue if any exist
   window.nextFile = nextFile
-  await loadFile(nextFile)
+  if (!window.fileCaches[nextFile]?.audioBuffer) {
+    await loadFile(nextFile)
+  }
   return nextFile
 }
 
-async function updateQueue (which) {
+async function renderQueue (which) {
   if (window[which].length <= 0) {
     document.getElementById(which).parentNode.querySelector('p.noneInQueue').style.display = 'block'
     document.getElementById(which).innerHTML = ''
@@ -607,49 +627,20 @@ async function updateQueue (which) {
     document.getElementById(which).innerHTML = ''
     setPlayQueueImages()
   })
+  window.preloading = true
   for (const file of window[which]) {
-    const domId = window.btoa(file)
-    await loadFile(file)
-    const domEls = document.querySelectorAll(`li[data-id="${domId}"]`)
-    for (const domEl of domEls) {
-      domEl.querySelector('.duration').textContent = formatTime(window.fileCaches[file].audioBuffer.duration)
-      let artworkMimeType
-      let artworkDataUri
-      if (window.fileCaches[file].metadata) {
-        const performers = window.fileCaches[file].metadata.performers
-        if (performers) domEl.querySelector('.artist').innerHTML = performers.join(' / ')
-        else domEl.querySelector('.artist').innerHTML = '[unknown artist]'
-        const album = window.fileCaches[file].metadata.album
-        if (album) {
-          domEl.querySelector('.emdash').innerHTML = ' — '
-          domEl.querySelector('.album').innerHTML = window.fileCaches[file].metadata.album
-        } else {
-          domEl.querySelector('.emdash').innerHTML = ''
-          domEl.querySelector('.album').innerHTML = ''
-        }
-        domEl.querySelector('.fileTitle').innerHTML = window.fileCaches[file].metadata.title || '[untitled]'
-
-        // set artwork
-        const defaultMimeType = 'image/png'
-        const defaultDataUri = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAADUlEQVR42gECAP3/AAAAAgABUyucMAAAAABJRU5ErkJggg==' // 1 black pixel
-        if (window.fileCaches[file].metadata.pictures) {
-          artworkMimeType = window.fileCaches[file].metadata.pictures[0]?.mimeType || defaultMimeType
-          artworkDataUri = window.fileCaches[file].metadata.pictures[0]?.data || defaultDataUri
-        } else {
-          artworkMimeType = defaultMimeType
-          artworkDataUri = defaultDataUri
-        }
-      }
-
-      // animate artwork transition
-      if (domEl.querySelector('.artwork').style.backgroundImage !== `url("data:${artworkMimeType};base64,${artworkDataUri}")`) { // do not trigger the transition if the artwork has not changed
-        // the view transition is commented out because it blocks clicking around the play queue area for a full second; see https://github.com/Otherworldly-Media/Fanfare-Music-Player/issues/86
-        // document.startViewTransition(() => {
-        domEl.querySelector('.artwork').style.backgroundImage = `url("data:${artworkMimeType};base64,${artworkDataUri}")`
-        // })
-      }
+    if (window.stopPreloading) {
+      // a signal was sent to abort this preloading
+      window.stopPreloading = false
+      window.preloading = false
+      return
     }
+    if (!window.fileCaches[file]?.audioBuffer) {
+      await loadFile(file)
+    }
+    await updateQueueMetadata(file)
   }
+  window.preloading = false
 
   // purge automatic and manual play queues of any files that have been cached for some time and are no longer in the queue
   const now = Date.now()
@@ -659,6 +650,50 @@ async function updateQueue (which) {
     const isOlderThanHour = now - window.fileCaches[file].cacheTime > 60 * 60 * 1000
     if (!isInManualQueue && !isInAutomaticQueue && isOlderThanHour && window.currentFile !== file) {
       delete window.fileCaches[file]
+    }
+  }
+}
+
+async function updateQueueMetadata (file) {
+  const domId = window.btoa(file)
+  const domEls = document.querySelectorAll(`li[data-id="${domId}"]`)
+  for (const domEl of domEls) {
+    if (!window.fileCaches[file]) continue
+    domEl.querySelector('.duration').textContent = formatTime(window.fileCaches[file].audioBuffer.duration)
+    let artworkMimeType
+    let artworkDataUri
+    if (window.fileCaches[file].metadata) {
+      const performers = window.fileCaches[file].metadata.performers
+      if (performers) domEl.querySelector('.artist').innerHTML = performers.join(' / ')
+      else domEl.querySelector('.artist').innerHTML = '[unknown artist]'
+      const album = window.fileCaches[file].metadata.album
+      if (album) {
+        domEl.querySelector('.emdash').innerHTML = ' — '
+        domEl.querySelector('.album').innerHTML = window.fileCaches[file].metadata.album
+      } else {
+        domEl.querySelector('.emdash').innerHTML = ''
+        domEl.querySelector('.album').innerHTML = ''
+      }
+      domEl.querySelector('.fileTitle').innerHTML = window.fileCaches[file].metadata.title || '[untitled]'
+
+      // set artwork
+      const defaultMimeType = 'image/png'
+      const defaultDataUri = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAADUlEQVR42gECAP3/AAAAAgABUyucMAAAAABJRU5ErkJggg==' // 1 black pixel
+      if (window.fileCaches[file].metadata.pictures) {
+        artworkMimeType = window.fileCaches[file].metadata.pictures[0]?.mimeType || defaultMimeType
+        artworkDataUri = window.fileCaches[file].metadata.pictures[0]?.data || defaultDataUri
+      } else {
+        artworkMimeType = defaultMimeType
+        artworkDataUri = defaultDataUri
+      }
+    }
+
+    // animate artwork transition
+    if (domEl.querySelector('.artwork').style.backgroundImage !== `url("data:${artworkMimeType};base64,${artworkDataUri}")`) { // do not trigger the transition if the artwork has not changed
+      // the view transition is commented out because it blocks clicking around the play queue area for a full second; see https://github.com/Otherworldly-Media/Fanfare-Music-Player/issues/86
+      // document.startViewTransition(() => {
+      domEl.querySelector('.artwork').style.backgroundImage = `url("data:${artworkMimeType};base64,${artworkDataUri}")`
+      // })
     }
   }
 }
@@ -883,7 +918,7 @@ function resetPlaybackControls () {
   window.playing = false
   clearPlayQueueImages()
   window.currentFile = null
-  updateQueue('automaticPlayQueue')
+  renderQueue('automaticPlayQueue')
 }
 window.resetPlaybackControls = resetPlaybackControls
 
