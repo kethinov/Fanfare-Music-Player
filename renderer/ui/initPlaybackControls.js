@@ -8,6 +8,23 @@ module.exports = () => {
   window.gainNode = window.audioContext.createGain() // create a gain node for controlling volume
   window.gainNode.connect(window.audioContext.destination) // connect gain node to audio context for controlling volume
   window.fileCaches = {} // cache file data for gapless playback
+  window.pcmChunks = {} // temporary place to store chunks of PCM data when requesting it from the main process
+
+  // listeners for when a chunk of audio data is received by the main process
+  window.electron.onConvertToPCMAudioChunk((data) => {
+    const { filePath, chunk } = data
+    if (!window.pcmChunks[filePath]) {
+      window.pcmChunks[filePath] = []
+    }
+    window.pcmChunks[filePath].push(new Uint8Array(chunk))
+  })
+  window.electron.onConvertToPCMAudioComplete((data) => {
+    const { filePath } = data
+    // mark this file as complete
+    if (window.pcmChunks[filePath]) {
+      window.pcmChunks[filePath]._complete = true
+    }
+  })
 
   // helper function for creating a typical proxy
   function createProxy (arr, onChange) {
@@ -158,6 +175,46 @@ module.exports = () => {
   // apply settings
   document.getElementById('volumeBar').value = electron.store.get('volume') || 100
   window.gainNode.gain.value = document.getElementById('volumeBar').value / 100 // set initial volume
+
+  // click the queue: highlight selected file in the play queue
+  document.getElementById('automaticPlayQueue').addEventListener('click', highlightSelectedFileInPlayQueue)
+  document.getElementById('manualPlayQueue').addEventListener('click', highlightSelectedFileInPlayQueue)
+  function highlightSelectedFileInPlayQueue (event) {
+    let target = event.target
+    while (target.id !== 'automaticPlayQueue' && target.id !== 'manualPlayQueue') {
+      if (target.getAttribute('data-id')) {
+        console.log('TODO: highlight item', window.atob(target.getAttribute('data-id')))
+        break
+      } else target = target.parentNode
+    }
+  }
+
+  // double click the queue: play a file in the play queue
+  document.getElementById('automaticPlayQueue').addEventListener('dblclick', playFileInPlayQueue)
+  document.getElementById('manualPlayQueue').addEventListener('dblclick', playFileInPlayQueue)
+  function playFileInPlayQueue (event) {
+    let target = event.target
+    while (target.id !== 'automaticPlayQueue' && target.id !== 'manualPlayQueue') {
+      if (target.getAttribute('data-id')) {
+        console.log('TODO: play item', window.atob(target.getAttribute('data-id')))
+        break
+      } else target = target.parentNode
+    }
+  }
+
+  // mouse over the queue: show a clear button
+  document.getElementById('automaticPlayQueue').addEventListener('mouseover', mouseOverQueue)
+  document.getElementById('manualPlayQueue').addEventListener('mouseover', mouseOverQueue)
+  function mouseOverQueue (event) {
+    let target = event.target
+    while (target.id !== 'automaticPlayQueue' && target.id !== 'manualPlayQueue') {
+      if (target.getAttribute('data-id')) {
+        console.log('TODO: show clear button', window.atob(target.getAttribute('data-id')))
+        // TODO: document.querySelector('button.clear svg')
+        break
+      } else target = target.parentNode
+    }
+  }
 }
 
 async function playPause () {
@@ -350,47 +407,45 @@ async function loadFile (file) {
 
   // start loading
   window.loadingFile = file
+
+  // show loading spinner
   if (!window.playing && window.userPressedPlay) document.documentElement.classList.add('global-wait')
+
+  // we get the data in chunks via ipc so the UI doesn't freeze
   let pcmBuffer // var to store raw PCM audio data
   let audioBuffer // var to store audio binary in the Web Audio API's format
 
-  // special handler for SPC files
-  if (file.endsWith('.spc')) {
-    // get SPC binary data from the main process
-    const rawAudioData = await window.electron.getBinaryData(file)
-    const rawArrayBuffer = new Uint8Array(rawAudioData.buffer)
-
-    // convert the SPC file to PCM audio
-    const SPCPlayer = await require('ui/loadSpcPlayer')()
-    pcmBuffer = await SPCPlayer.renderToPCMBuffer(rawArrayBuffer)
-  }
-
-  // load PCM data into the Web Audio API
   try {
-    // if we don't already have the PCM data, get PCM data from FFmpeg from the main process
-    if (!pcmBuffer) {
-      // we get the data in chunks via ipc so the UI doesn't freeze
-      const pcmChunks = []
-      await new Promise((resolve, reject) => {
-        const listenerEvent = window.electron.onConvertToPCMAudioChunk((chunk) => {
-          pcmChunks.push(new Uint8Array(chunk))
-        })
-        window.electron.onConvertToPCMAudioComplete(() => {
-          window.electron.offConvertToPCMAudioChunk(listenerEvent) // remove listener so listeners don't pile up in the renderer process creating a memory leak
-          resolve()
-        })
-        window.electron.convertToPCMAudio(file).catch(reject)
-      })
+    // initialize chunk storage for this file
+    window.pcmChunks[file] = []
 
-      // reassemble the chunks into pcm binary
-      const totalLength = pcmChunks.reduce((sum, chunk) => sum + chunk.length, 0)
-      pcmBuffer = new Uint8Array(totalLength)
-      let offset = 0
-      for (const chunk of pcmChunks) {
-        pcmBuffer.set(chunk, offset)
-        offset += chunk.length
+    // start conversion
+    await window.electron.convertToPCMAudio(file)
+
+    // wait for completion
+    await new Promise((resolve) => {
+      const checkComplete = () => {
+        if (window.pcmChunks[file]?._complete) {
+          resolve()
+        } else {
+          setTimeout(checkComplete, 50)
+        }
       }
+      checkComplete()
+    })
+
+    // reassemble the chunks into pcm binary
+    const chunks = window.pcmChunks[file].filter(c => c instanceof Uint8Array)
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    pcmBuffer = new Uint8Array(totalLength)
+    let offset = 0
+    for (const chunk of chunks) {
+      pcmBuffer.set(chunk, offset)
+      offset += chunk.length
     }
+
+    // clean up
+    delete window.pcmChunks[file]
 
     // convert the pcm binary into a Web Audio API buffer
     const float32Data = new Float32Array(
@@ -430,20 +485,15 @@ async function loadFile (file) {
 
   // cache audio buffer for later reuse
   if (!window.fileCaches[file]) {
-    window.fileCaches[file] = {
-      cacheTime: Date.now()
-    }
+    window.fileCaches[file] = { cacheTime: Date.now() }
   }
-  window.fileCaches[file].audioBuffer = audioBuffer // cache the audioBuffer
+  window.fileCaches[file].audioBuffer = audioBuffer
 
   // get media metadata
   if (!window.fileCaches[file]) window.fileCaches[file] = {}
   if (!window.fileCaches[file].metadata) {
     if (file.endsWith('.spc')) {
-      window.fileCaches[file].metadata = await window.electron.getAudioFileMetadata({
-        file,
-        specialType: 'spc'
-      })
+      window.fileCaches[file].metadata = await window.electron.getAudioFileMetadata({ file, specialType: 'spc' })
     } else {
       window.fileCaches[file].metadata = await window.electron.getAudioFileMetadata({ file })
     }
@@ -452,16 +502,12 @@ async function loadFile (file) {
     const pictureChunks = []
     await window.electron.getAudioFilePictures(
       { file },
-      (chunk) => {
-        pictureChunks.push(chunk)
-      },
+      (chunk) => { pictureChunks.push(chunk) },
       () => {
         const json = pictureChunks.join('')
         const picturesPayload = JSON.parse(json)
         window.fileCaches[file].metadata.pictures = picturesPayload.pictures || []
-        if (file === window.currentFile) {
-          updateAlbumArt()
-        }
+        if (file === window.currentFile) updateAlbumArt()
         updateQueueMetadata(file)
       }
     )

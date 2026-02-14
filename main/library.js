@@ -81,13 +81,6 @@ async function addFilesToLibrary (filesToAdd, chunk, filesAdded) {
   })
 }
 
-// handle open binary data calls from renderer
-ipcMain.handle('getBinaryData', async (event, file) => {
-  // file = path.join(process.cwd(), 'sample_audio/White Noise.m4a') // uncomment this to test this method against a hardcoded, small file
-  const fileBuffer = fs.readFileSync(file) // read the file as a buffer
-  return fileBuffer // send the binary data to the renderer process
-})
-
 // handle get file metadata calls from renderer, except for pictures
 const getAudioFileMetadata = require('../models/getAudioFileMetadata')
 ipcMain.handle('getAudioFileMetadata', async (event, params) => getAudioFileMetadata(params))
@@ -121,47 +114,59 @@ ipcMain.handle('convertToPCMAudio', async (event, filePath) => {
   const chunks = []
   const CHUNK_SIZE = 262144 // 256KB chunks (65536 float32 samples)
 
-  return new Promise((resolve, reject) => {
-    const ffmpeg = spawn(ffmpegPath, [
-      '-i', filePath,
-      '-f', 'f32le',
-      '-acodec', 'pcm_f32le',
-      '-ar', '48000',
-      '-ac', '2',
-      'pipe:1'
-    ])
+  if (filePath.endsWith('.spc')) {
+    // initialize SPCPlayer module
+    const SPCPlayer = await require('spc-converter')()
 
-    ffmpeg.stdout.on('data', chunk => {
-      chunks.push(chunk)
+    // convert SPC file to PCM Buffer
+    const pcmBuffer = await SPCPlayer.renderToPCMBuffer(filePath)
 
-      // send chunk via ipc when we have enough data
-      if (Buffer.concat(chunks).length >= CHUNK_SIZE) {
-        const buffer = Buffer.concat(chunks)
-        const toSend = buffer.subarray(0, CHUNK_SIZE)
-        event.sender.send('convertToPCMAudio-chunk', toSend)
+    // send pcmBuffer as a single chunk since it will always be less than 256kb
+    event.sender.send('convertToPCMAudio-chunk', { filePath, chunk: pcmBuffer })
+    event.sender.send('convertToPCMAudio-complete', { filePath })
+  } else {
+    return new Promise((resolve, reject) => {
+      const ffmpeg = spawn(ffmpegPath, [
+        '-i', filePath,
+        '-f', 'f32le',
+        '-acodec', 'pcm_f32le',
+        '-ar', '48000', // hardcoded to 48000 hz, which is the Web Audio API's default sampling rate in the renderer process
+        '-ac', '2', // hardcoded to 2 channel stereo; if we change this, then the de-interleaving code in the renderer process will likely need to be updated since it is hardcoded to assume 2 channel audio; see https://github.com/Otherworldly-Media/Fanfare-Music-Player/issues/99 for more details
+        'pipe:1'
+      ])
 
-        // keep remainder for next chunk
-        if (buffer.length > CHUNK_SIZE) {
-          chunks.length = 0
-          chunks.push(buffer.subarray(CHUNK_SIZE))
+      ffmpeg.stdout.on('data', chunk => {
+        chunks.push(chunk)
+
+        // send chunk via ipc when we have enough data
+        if (Buffer.concat(chunks).length >= CHUNK_SIZE) {
+          const buffer = Buffer.concat(chunks)
+          const toSend = buffer.subarray(0, CHUNK_SIZE)
+          event.sender.send('convertToPCMAudio-chunk', { filePath, chunk: toSend })
+
+          // keep remainder for next chunk
+          if (buffer.length > CHUNK_SIZE) {
+            chunks.length = 0
+            chunks.push(buffer.subarray(CHUNK_SIZE))
+          } else {
+            chunks.length = 0
+          }
+        }
+      })
+
+      ffmpeg.on('error', reject)
+      ffmpeg.on('close', code => {
+        if (code === 0) {
+          // send final chunk
+          if (chunks.length > 0) {
+            event.sender.send('convertToPCMAudio-chunk', { filePath, chunk: Buffer.concat(chunks) })
+          }
+          event.sender.send('convertToPCMAudio-complete', { filePath })
+          resolve()
         } else {
-          chunks.length = 0
+          reject(new Error('FFmpeg failed'))
         }
-      }
+      })
     })
-
-    ffmpeg.on('error', reject)
-    ffmpeg.on('close', code => {
-      if (code === 0) {
-        // send final chunk
-        if (chunks.length > 0) {
-          event.sender.send('convertToPCMAudio-chunk', Buffer.concat(chunks))
-        }
-        event.sender.send('convertToPCMAudio-complete')
-        resolve()
-      } else {
-        reject(new Error('FFmpeg failed'))
-      }
-    })
-  })
+  }
 })
