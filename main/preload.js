@@ -3,7 +3,6 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 // support for sending chunks of PCM audio data to the renderer
 const pcmChunkCallbacks = new Map()
-let nextnextIdConvertToPCMAudioChunkId = 0
 
 ipcRenderer.on('convertToPCMAudio-chunk', (event, chunk) => {
   pcmChunkCallbacks.forEach((callback, id) => {
@@ -94,12 +93,6 @@ contextBridge.exposeInMainWorld('electron', {
     })
   },
 
-  // open binary data and send the binary to the renderer; use this method only for small files, otherwise it will block the UI in the renderer
-  getBinaryData: async (file) => {
-    const binaryData = await ipcRenderer.invoke('getBinaryData', file) // request binary data from the main process
-    return binaryData
-  },
-
   // open an audio file, convert it to PCM audio binary, and send the binary to the renderer
   convertToPCMAudio: async (file) => {
     return ipcRenderer.invoke('convertToPCMAudio', file)
@@ -107,18 +100,15 @@ contextBridge.exposeInMainWorld('electron', {
 
   // send a chunk of PCM audio data to the renderer
   onConvertToPCMAudioChunk: (callback) => {
-    const id = nextnextIdConvertToPCMAudioChunkId++
-    pcmChunkCallbacks.set(id, callback)
-    return id
+    const listener = (event, data) => callback(data)
+    ipcRenderer.on('convertToPCMAudio-chunk', listener)
+    return listener // return the listener so it can be removed later
   },
 
-  // signal that assembling all PCM chunks is complete
+  // signal that assembling all PCM audio chunks is complete
   onConvertToPCMAudioComplete: (callback) => {
-    ipcRenderer.once('convertToPCMAudio-complete', callback)
-  },
-
-  // remove onConvertToPCMAudioChunk listener when all chunks are sent
-  offConvertToPCMAudioChunk: (id) => {
-    pcmChunkCallbacks.delete(id)
+    const listener = (event, data) => callback(data)
+    ipcRenderer.on('convertToPCMAudio-complete', listener)
+    return listener // return the listener so it can be removed later
   }
 })
