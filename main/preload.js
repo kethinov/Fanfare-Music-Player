@@ -13,18 +13,19 @@ ipcRenderer.on('convertToPCMAudio-chunk', (event, chunk) => {
 // support for sending chunks of picture data from file metadata to the renderer
 const pictureChunkCallbacks = new Map()
 const pictureCompleteCallbacks = new Map()
-let pictureRequestId = 0
 
 ipcRenderer.on('getAudioFilePictures-chunk', (event, payload) => {
-  const cb = pictureChunkCallbacks.get(payload.pictureRequestId)
-  if (cb) cb(payload.chunk)
+  const { file, chunk } = payload
+  const cb = pictureChunkCallbacks.get(file)
+  if (cb) cb(chunk)
 })
 
 ipcRenderer.on('getAudioFilePictures-complete', (event, payload) => {
-  const cb = pictureCompleteCallbacks.get(payload.pictureRequestId)
+  const { file } = payload
+  const cb = pictureCompleteCallbacks.get(file)
   if (cb) cb(payload)
-  pictureChunkCallbacks.delete(payload.pictureRequestId)
-  pictureCompleteCallbacks.delete(payload.pictureRequestId)
+  pictureChunkCallbacks.delete(file)
+  pictureCompleteCallbacks.delete(file)
 })
 
 contextBridge.exposeInMainWorld('electron', {
@@ -81,16 +82,14 @@ contextBridge.exposeInMainWorld('electron', {
 
   // open the pictures part of the file metadata and send it to the renderer in chunks
   getAudioFilePictures: (params, onChunk, onComplete) => {
-    pictureRequestId++
-    pictureChunkCallbacks.set(pictureRequestId, onChunk)
-    pictureCompleteCallbacks.set(pictureRequestId, (payload) => {
+    const file = params.file
+    pictureChunkCallbacks.set(file, onChunk)
+    pictureCompleteCallbacks.set(file, (payload) => {
       onComplete(payload)
-      pictureChunkCallbacks.delete(pictureRequestId)
-      pictureCompleteCallbacks.delete(pictureRequestId)
+      pictureChunkCallbacks.delete(file)
+      pictureCompleteCallbacks.delete(file)
     })
-    return ipcRenderer.invoke('getAudioFilePictures', { ...params, pictureRequestId }).then(() => {
-      return { pictureRequestId }
-    })
+    return ipcRenderer.invoke('getAudioFilePictures', params)
   },
 
   // open an audio file, convert it to PCM audio binary, and send the binary to the renderer
