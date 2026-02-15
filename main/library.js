@@ -88,7 +88,7 @@ ipcMain.handle('getAudioFileMetadata', async (event, params) => getAudioFileMeta
 // handle get file picture metadata from renderer
 const getAudioFilePictures = require('../models/getAudioFilePictures')
 ipcMain.handle('getAudioFilePictures', async (event, params) => {
-  const pictureRequestId = params.pictureRequestId // use pictureRequestId from renderer
+  const file = params.file
   const pictureMetadata = getAudioFilePictures(params)
   const pictures = pictureMetadata.pictures || []
 
@@ -97,11 +97,10 @@ ipcMain.handle('getAudioFilePictures', async (event, params) => {
 
   for (let offset = 0; offset < json.length; offset += CHUNK_SIZE) {
     const chunk = json.slice(offset, offset + CHUNK_SIZE)
-    event.sender.send('getAudioFilePictures-chunk', { pictureRequestId, chunk })
+    event.sender.send('getAudioFilePictures-chunk', { file, chunk })
   }
 
-  event.sender.send('getAudioFilePictures-complete', { pictureRequestId, file: params.file })
-  return { pictureRequestId }
+  event.sender.send('getAudioFilePictures-complete', { file })
 })
 
 // convert file to pcm data
