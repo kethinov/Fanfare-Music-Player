@@ -149,7 +149,15 @@ module.exports = () => {
   // handle seek events
   document.getElementById('seekBar').addEventListener('input', () => {
     const audioBuffer = window.fileCaches[window.currentFile].audioBuffer
-    const seekPosition = (document.getElementById('seekBar').value / 100) * audioBuffer.duration
+    let seekPosition = (document.getElementById('seekBar').value / 100) * audioBuffer.duration
+
+    // prevent seeking to within 2 seconds of the end: this intentional bug prevents worse bugs. with this limitation removed, seeking sometimes breaks, likely due to an issue associated with the track ending while the seek is still working to schedule the next source
+    const maxSeekPosition = audioBuffer.duration - 2
+    if (seekPosition > maxSeekPosition) {
+      seekPosition = maxSeekPosition
+      document.getElementById('seekBar').value = (seekPosition / audioBuffer.duration) * 100
+    }
+
     window.userStoppedPlayback = true
     seekPlayback()
     window.userStoppedPlayback = false
@@ -537,6 +545,20 @@ async function loadFile (file) {
 async function queueAudio (file, offset = 0, seek = false) {
   if (!file) return
   if (window.userStoppedPlayback) return
+
+  // wait for audio buffer to be available with a 30 second timeout
+  const timeoutMs = 30000
+  const start = Date.now()
+  while ((!window.fileCaches[file]?.audioBuffer) && Date.now() - start < timeoutMs) {
+    await new Promise(resolve => window.setTimeout(resolve, 50))
+  }
+
+  // check if buffer loaded before timeout
+  if (!window.fileCaches[file]?.audioBuffer) {
+    console.error(`Audio buffer for ${file} failed to load within ${timeoutMs}ms`)
+    return
+  }
+
   const audioBuffer = window.fileCaches[file].audioBuffer
   const source = window.audioContext.createBufferSource()
   source.buffer = audioBuffer
@@ -559,20 +581,22 @@ async function queueAudio (file, offset = 0, seek = false) {
 
       if (!window.playingInterval) {
         function updateSeekBar () {
-          if (window.playing) {
+          if (window.playing && window.fileCaches[window.currentFile]?.audioBuffer) {
             window.playingFileElapsedTime = window.audioContext.currentTime - window.playbackStartTime
             document.getElementById('currentTime').textContent = formatTime(window.playingFileElapsedTime)
             document.getElementById('seekBar').value = (window.playingFileElapsedTime / window.fileCaches[window.currentFile].audioBuffer.duration) * 100
-          }
+          } else window.clearInterval(window.playingInterval)
         }
         updateSeekBar()
         window.playingInterval = window.setInterval(updateSeekBar, 1000)
       }
 
-      document.querySelector('#playPauseButton input').src = 'renderer://images/pause.svg'
-      document.querySelector('#playPauseButton').title = 'Pause'
-      displayMetadata()
-      addNextFilesToAutomaticPlayQueue()
+      if (!seek) {
+        document.querySelector('#playPauseButton input').src = 'renderer://images/pause.svg'
+        document.querySelector('#playPauseButton').title = 'Pause'
+        displayMetadata()
+        addNextFilesToAutomaticPlayQueue()
+      }
     }
 
     file = await preloadNextFile()
@@ -607,21 +631,24 @@ function scheduleNextSource () {
 
   // stop and disconnect any previously scheduled next source
   if (window.scheduledNextSource) {
-    try { window.scheduledNextSource.stop() } catch (e) {}
-    window.scheduledNextSource.disconnect()
+    // only stop if it's not the currently playing source
+    if (window.scheduledNextSource !== window.currentSource && window.scheduledNextSource._id !== window.currentSourceId) {
+      try { window.scheduledNextSource.stop() } catch (e) {}
+      window.scheduledNextSource.disconnect()
+    }
     window.scheduledNextSource = null
   }
 
   // schedule next track to start exactly after the current one
-  const now = window.audioContext.currentTime
-  const offset = 0
-  const timeLeft = window.fileCaches[window.currentFile].audioBuffer.duration - (now - window.playbackStartTime + offset)
-  const startTime = now + timeLeft
   const nextSource = window.audioContext.createBufferSource()
   nextSource.buffer = window.fileCaches[nextFile].audioBuffer
   nextSource.playbackRate.value = Number(electron.store.get('playbackSpeed')) || 1
   nextSource.connect(window.gainNode)
   nextSource.onended = onFilePlaybackEnd
+  const now = window.audioContext.currentTime
+  const offset = 0
+  const timeLeft = window.fileCaches[window.currentFile].audioBuffer.duration - (now - window.playbackStartTime + offset)
+  const startTime = now + timeLeft
   nextSource.start(startTime)
   window.fileCaches[nextFile].source = nextSource
   window.nextStartTime = startTime
@@ -631,13 +658,6 @@ function scheduleNextSource () {
 
 // called when the play queue changes
 function rescheduleNextSource () {
-  // stop and disconnect any previously scheduled next source
-  if (window.scheduledNextSource) {
-    try { window.scheduledNextSource.stop() } catch (e) {}
-    window.scheduledNextSource.disconnect()
-    window.scheduledNextSource = null
-  }
-
   // recalculate next file based on current queue state
   let nextFile
   if (window.repeat === 'file') nextFile = window.currentFile
@@ -686,7 +706,6 @@ async function renderQueue (which) {
     const domId = window.btoa(file)
     items += `
         <li data-id="${domId}">
-          <hr>
           <div class="metadata">
             <div class="artwork"></div>
             <div class="info">
@@ -702,10 +721,12 @@ async function renderQueue (which) {
               <button>${clearButtonSvg}</button>
             </div>
           </div>
+          <hr>
         </li>
       `
   }
   document.getElementById(which).innerHTML = items
+  window.setSidebarContentBoxDimensions({ justQueues: true })
   document.getElementById(which).querySelector('.clearButton').addEventListener('submit', (event) => {
     event.preventDefault()
     const which = event.target.querySelector('button').value
