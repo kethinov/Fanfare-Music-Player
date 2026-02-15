@@ -125,6 +125,19 @@ nav#sidebar {
       margin: 0;
     }
 
+    li:first-of-type {
+      height: 38px;
+      position: relative;
+      background-color: #eaeaea;
+      z-index: 1;
+
+      div.metadata {
+        position: fixed;
+        background-color: #eaeaea;
+        border-bottom: 1px #cfd0d3 solid;
+      }
+    }
+
     div.metadata {
       display: flex;
       justify-content: space-between;

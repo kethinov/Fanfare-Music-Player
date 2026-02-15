@@ -18,6 +18,7 @@ module.exports = () => {
       document.getElementById(selectedTab + 'Tab').parentNode.className = 'selected'
       document.getElementById(selectedTab).removeAttribute('hidden')
       electron.store.set('selectedSidebarTab', selectedTab)
+      window.setSidebarContentBoxDimensions({ justQueues: true })
     }
   }
   if (electron.store.get('selectedSidebarTab')) selectSidebarTab(electron.store.get('selectedSidebarTab'))

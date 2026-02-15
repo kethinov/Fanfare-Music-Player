@@ -9,8 +9,8 @@ module.exports = (app) => {
     res.render('index', model, async () => {
       // init ui elements
       require('ui/initPlaybackControls')()
-      require('ui/initSidebarControls')()
       require('ui/initResizerControls')()
+      require('ui/initSidebarControls')()
 
       // decide which initial route to load
       if (libraryIsEmpty) await app.triggerRoute({ route: '/addFilesToLibrary' })

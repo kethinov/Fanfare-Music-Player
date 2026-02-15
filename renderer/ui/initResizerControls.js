@@ -17,7 +17,17 @@ module.exports = () => {
   const headerStyles = window.getComputedStyle(header)
   const sidebarTabs = document.querySelector('#sidebarTabs')
   const sidebarsTabStyles = window.getComputedStyle(sidebarTabs)
-  function setSidebarContentBoxDimensions () {
+  function setSidebarContentBoxDimensions (params) {
+    if (document.querySelector('#manualPlayQueue li')) {
+      document.querySelector('#manualPlayQueue li:first-of-type div.metadata').style.width = document.querySelector('#manualPlayQueue li:first-of-type').offsetWidth + 'px'
+    }
+    if (document.querySelector('#automaticPlayQueue li')) {
+      document.querySelector('#automaticPlayQueue li:first-of-type div.metadata').style.width = document.querySelector('#automaticPlayQueue li:first-of-type').offsetWidth + 'px'
+    }
+    if (document.querySelector('#playHistory li')) {
+      document.querySelector('#playHistory li:first-of-type div.metadata').style.width = document.querySelector('#playHistory li:first-of-type').offsetWidth + 'px'
+    }
+    if (params?.justQueues) return
     document.getElementById('artwork').style.width = sidebar.offsetWidth + 'px'
     document.getElementById('artwork').style.height = sidebar.offsetWidth + 'px'
     const usedHeight = header.offsetHeight + sidebar.offsetWidth + sidebarTabs.offsetHeight + parseInt(sidebarsTabStyles.marginTop) + parseInt(sidebarsTabStyles.marginBottom) + parseInt(headerStyles.borderBottomWidth)
@@ -26,6 +36,7 @@ module.exports = () => {
     document.getElementById('history').style.height = `calc(100vh - ${usedHeight}px)`
   }
   setSidebarContentBoxDimensions()
+  window.setSidebarContentBoxDimensions = setSidebarContentBoxDimensions
 
   // sidebar resizer
   const sidebarsStyles = window.getComputedStyle(sidebar)
