@@ -42,7 +42,7 @@ module.exports = () => {
     })
   }
 
-  // files the user has manually set to play next
+  // actions taken when the manual play queue is altered: files the user has manually set to play next
   let manualPlayQueue = createProxy([], onManualPlayQueueChange)
   Object.defineProperty(window, 'manualPlayQueue', {
     get () {
@@ -63,7 +63,7 @@ module.exports = () => {
     }
   }
 
-  // files the app has automatically determined to play next
+  // actions taken when the automatic play queue is altered: files the app has automatically determined to play next
   let automaticPlayQueue = createProxy([], onAutomaticPlayQueueChange)
   Object.defineProperty(window, 'automaticPlayQueue', {
     get () {
@@ -85,7 +85,7 @@ module.exports = () => {
   }
   window.maxFilesInAutomaticQueue = 43 // maximum number of files allowed in the automatic queue
 
-  // play history
+  // actions taken when play history is altered
   let playHistory = createProxy([], onPlayHistoryChange)
   Object.defineProperty(window, 'playHistory', {
     get () {
@@ -106,12 +106,138 @@ module.exports = () => {
     }
   }
 
+  // actions taken when the shuffle state is altered
+  let shuffleState = false
+  Object.defineProperty(window, 'shuffle', {
+    get () {
+      return shuffleState
+    },
+    set (newValue) {
+      const oldValue = shuffleState
+      if (oldValue === newValue) return
+      shuffleState = Boolean(newValue)
+      onShuffleChange(shuffleState, oldValue)
+    }
+  })
+  function onShuffleChange (isShuffled, wasShuffled) {
+    if (isShuffled) {
+      // activate shuffle
+      document.querySelector('#shuffleButton g').setAttribute('fill', window.accentColor)
+      document.querySelector('#shuffleButton g').setAttribute('stroke', window.accentColor)
+      document.querySelector('#shuffleButton').classList.add('active')
+    } else {
+      // deactivate shuffle
+      document.querySelector('#shuffleButton g').setAttribute('fill', '#000')
+      document.querySelector('#shuffleButton g').setAttribute('stroke', '#000')
+      document.querySelector('#shuffleButton').classList.remove('active')
+    }
+  }
+
+  // actions taken when the repeat state is altered
+  let repeatState = null
+  Object.defineProperty(window, 'repeat', {
+    get () {
+      return repeatState
+    },
+    set (newValue) {
+      const valid = newValue === null || newValue === 'set' || newValue === 'file'
+      if (!valid) newValue === null
+      const oldValue = repeatState
+      if (oldValue === newValue) return
+      repeatState = newValue
+      onRepeatChange(newValue, oldValue)
+    }
+  })
+  function onRepeatChange (mode, previousMode) {
+    if (mode === 'set') {
+      document.querySelector('#repeatButton svg.repeat').style.display = 'inline'
+      document.querySelector('#repeatButton svg.repeat-1').style.display = 'none'
+      document.querySelector('#repeatButton svg.repeat').setAttribute('fill', window.accentColor)
+      document.querySelector('#repeatButton').classList.add('active')
+    } else if (mode === 'file') {
+      document.querySelector('#repeatButton svg.repeat').style.display = 'none'
+      document.querySelector('#repeatButton svg.repeat-1').style.display = 'inline'
+      document.querySelector('#repeatButton svg.repeat-1').setAttribute('fill', window.accentColor)
+      document.querySelector('#repeatButton').classList.add('active')
+    } else {
+      document.querySelector('#repeatButton svg.repeat').style.display = 'inline'
+      document.querySelector('#repeatButton svg.repeat-1').style.display = 'none'
+      document.querySelector('#repeatButton svg.repeat').setAttribute('fill', '#000')
+      document.querySelector('#repeatButton').classList.remove('active')
+    }
+  }
+
   // handle button presses on the media controls
-  document.querySelector('#shuffleButton').addEventListener('click', toggleShuffle)
+  document.querySelector('#shuffleButton').addEventListener('click', () => {
+    window.shuffle = !window.shuffle
+    window.repeat = null
+    clearPlayQueueImages()
+    if (window.shuffle) {
+      // replace automatic queue with a list of random files from the current filter
+      const rows = window.table.getRows('active')
+      const filePaths = rows.map(row => row.getData().file_path)
+      window.automaticPlayQueue = [...filePaths]
+
+      // remove current file from the array to shuffle
+      const idx = window.automaticPlayQueue.indexOf(window.currentFile)
+      if (idx !== -1) window.automaticPlayQueue.splice(idx, 1)
+
+      // randomize the array
+      window.automaticPlayQueue = shuffleArray(window.automaticPlayQueue)
+
+      // trim list to window.maxFilesInAutomaticQueue
+      window.automaticPlayQueue.splice(window.maxFilesInAutomaticQueue)
+    } else {
+      // replace automatic queue with whatever the next files are after the currently playing one
+      if (window.currentFile) {
+        // get the files that are after the currently playing file
+        const rows = window.table.getRows('active')
+        const currentIndex = rows.findIndex(row => row.getData().file_path === window.currentFile)
+        const rowsAfterCurrent = rows.slice(currentIndex + 1).map(row => row.getData().file_path)
+        window.automaticPlayQueue = [...rowsAfterCurrent]
+
+        // trim list to window.maxFilesInAutomaticQueue
+        window.automaticPlayQueue.splice(window.maxFilesInAutomaticQueue)
+      } else {
+        // no file is currently playing, so replace the automatic queue with whatever the beginning of the current view is
+        const rows = window.table.getRows('active')
+        const filePaths = rows.map(row => row.getData().file_path)
+        window.automaticPlayQueue = [...filePaths]
+
+        // trim list to window.maxFilesInAutomaticQueue
+        window.automaticPlayQueue.splice(window.maxFilesInAutomaticQueue)
+      }
+    }
+    rescheduleNextSource({ forceStopNextSource: true })
+    setPlayQueueImages()
+  })
   document.querySelector('#previousButton').addEventListener('click', previousFile)
   document.querySelector('#playPauseButton').addEventListener('click', playPause)
   document.querySelector('#nextButton').addEventListener('click', nextFile)
-  document.querySelector('#repeatButton').addEventListener('click', toggleRepeat)
+  document.querySelector('#repeatButton').addEventListener('click', () => {
+    if (!window.repeat) window.repeat = 'set'
+    else if (window.repeat === 'set') window.repeat = 'file'
+    else window.repeat = null
+    window.shuffle = null
+    clearPlayQueueImages()
+
+    if (window.repeat === 'set') {
+      // snapshot queue for set-repeat
+      if (window.currentFile) window.automaticPlayQueueSnapshot = [window.currentFile, ...window.automaticPlayQueue]
+      else {
+        const rows = window.table.getRows('active').slice(0, window.maxFilesInAutomaticQueue)
+        window.automaticPlayQueueSnapshot = rows.map(row => row.getData().file_path)
+      }
+      addNextFilesToAutomaticPlayQueue()
+    } else if (window.repeat === 'file') {
+      addNextFilesToAutomaticPlayQueue()
+    } else {
+      window.automaticPlayQueue = []
+      addNextFilesToAutomaticPlayQueue()
+    }
+    rescheduleNextSource({ forceStopNextSource: true })
+    setPlayQueueImages()
+  })
   document.querySelector('#playbackSpeedButton').addEventListener('click', async (event) => {
     event.preventDefault()
     if (typeof window.table !== 'undefined') {
@@ -625,23 +751,28 @@ function onFilePlaybackEnd () {
   }
 }
 
-function scheduleNextSource () {
-  const nextFile = window.nextFile
-  if (!nextFile || !window.fileCaches[nextFile]?.audioBuffer) return
+async function scheduleNextSource (params) {
+  if (window.debounceScheduleNextSource) return
+  window.debounceScheduleNextSource = true
 
   // stop and disconnect any previously scheduled next source
   if (window.scheduledNextSource) {
-    // only stop if it's not the currently playing source
-    if (window.scheduledNextSource !== window.currentSource && window.scheduledNextSource._id !== window.currentSourceId) {
+    // stop if forceStopNextSource is true or if it's a different source than currently playing
+    if (params?.forceStopNextSource || window.scheduledNextSource._id !== window.currentSourceId) {
       try { window.scheduledNextSource.stop() } catch (e) {}
       window.scheduledNextSource.disconnect()
     }
     window.scheduledNextSource = null
   }
 
+  const nextFile = window.nextFile
+  if (!nextFile) return
+  if (!window.fileCaches[nextFile]?.audioBuffer) await loadFile(nextFile)
+
   // schedule next track to start exactly after the current one
   const nextSource = window.audioContext.createBufferSource()
   nextSource.buffer = window.fileCaches[nextFile].audioBuffer
+  nextSource._id = Date.now() + Math.random() // unique id for this source
   nextSource.playbackRate.value = Number(electron.store.get('playbackSpeed')) || 1
   nextSource.connect(window.gainNode)
   nextSource.onended = onFilePlaybackEnd
@@ -653,11 +784,11 @@ function scheduleNextSource () {
   window.fileCaches[nextFile].source = nextSource
   window.nextStartTime = startTime
   window.scheduledNextSource = nextSource
-  window.debounceScheduleNextSource = true
+  window.debounceScheduleNextSource = false
 }
 
 // called when the play queue changes
-function rescheduleNextSource () {
+function rescheduleNextSource (params) {
   // recalculate next file based on current queue state
   let nextFile
   if (window.repeat === 'file') nextFile = window.currentFile
@@ -666,7 +797,8 @@ function rescheduleNextSource () {
   window.nextFile = nextFile
 
   // reschedule with the updated next file
-  scheduleNextSource()
+  if (params?.forceStopNextSource) scheduleNextSource({ forceStopNextSource: true })
+  else scheduleNextSource()
 }
 
 async function preloadNextFile () {
@@ -731,12 +863,14 @@ async function renderQueue (which) {
     event.preventDefault()
     const which = event.target.querySelector('button').value
     clearPlayQueueImages()
+    window.repeat = null
     window[which] = []
-    rescheduleNextSource()
+    rescheduleNextSource({ forceStopNextSource: true })
     document.getElementById(which).innerHTML = ''
     setPlayQueueImages()
   })
   window.preloading = true
+  let seen = {}
   for (const file of window[which]) {
     if (window.stopPreloading) {
       // a signal was sent to abort this preloading
@@ -747,7 +881,9 @@ async function renderQueue (which) {
     if (!window.fileCaches[file]?.audioBuffer) {
       await loadFile(file)
     }
-    await updateQueueMetadata(file)
+    if (!seen[file]) await updateQueueMetadata(file)
+    seen[file] = true
+    await new Promise(resolve => window.setTimeout(resolve, 0)) // yield to event loop
   }
   window.preloading = false
 
@@ -810,7 +946,7 @@ async function updateQueueMetadata (file) {
           const index = Array.from(target.children).indexOf(domEl) - 1
           domEl.setAttribute('hidden', 'hidden')
           window[queue].splice(index, 1)
-          rescheduleNextSource()
+          rescheduleNextSource({ forceStopNextSource: true })
           clearPlayQueueImages()
           setPlayQueueImages()
         })
@@ -824,6 +960,8 @@ async function updateQueueMetadata (file) {
       domEl.querySelector('.artwork').style.backgroundImage = `url("data:${artworkMimeType};base64,${artworkDataUri}")`
       // })
     }
+
+    await new Promise(resolve => window.setTimeout(resolve, 0)) // yield to event loop
   }
 }
 
@@ -889,59 +1027,6 @@ function formatTime (seconds) {
   return `${minutes}:${secs}`
 }
 
-function toggleShuffle () {
-  clearPlayQueueImages()
-  if (window.shuffle) {
-    // deactivate shuffle
-    window.shuffle = false
-    document.querySelector('#shuffleButton g').setAttribute('fill', '#000')
-    document.querySelector('#shuffleButton g').setAttribute('stroke', '#000')
-    document.querySelector('#shuffleButton').classList.remove('active')
-
-    // replace automatic queue with whatever the next files are after the currently playing one
-    if (window.currentFile) {
-      // get the files that are after the currently playing file
-      const rows = window.table.getRows('active')
-      const currentIndex = rows.findIndex(row => row.getData().file_path === window.currentFile)
-      const rowsAfterCurrent = rows.slice(currentIndex + 1).map(row => row.getData().file_path)
-      window.automaticPlayQueue = [...rowsAfterCurrent]
-
-      // trim list to window.maxFilesInAutomaticQueue
-      window.automaticPlayQueue.splice(window.maxFilesInAutomaticQueue)
-    } else { // no file is currently playing, so replace the automatic queue with whatever the beginning of the current view is
-      // get the list of files in the current view
-      const rows = window.table.getRows('active')
-      const filePaths = rows.map(row => row.getData().file_path)
-      window.automaticPlayQueue = [...filePaths]
-
-      // trim list to window.maxFilesInAutomaticQueue
-      window.automaticPlayQueue.splice(window.maxFilesInAutomaticQueue)
-    }
-  } else {
-    // shuffle
-    window.shuffle = true
-    document.querySelector('#shuffleButton g').setAttribute('fill', window.accentColor)
-    document.querySelector('#shuffleButton g').setAttribute('stroke', window.accentColor)
-    document.querySelector('#shuffleButton').classList.add('active')
-
-    // replace automatic queue with a list of random files from the current filter
-    const rows = window.table.getRows('active')
-    const filePaths = rows.map(row => row.getData().file_path)
-    window.automaticPlayQueue = [...filePaths]
-
-    // remove current file from the array to shuffle
-    const idx = window.automaticPlayQueue.indexOf(window.currentFile)
-    if (idx !== -1) window.automaticPlayQueue.splice(idx, 1)
-
-    // randomize the array
-    window.automaticPlayQueue = shuffleArray(window.automaticPlayQueue)
-
-    // trim list to window.maxFilesInAutomaticQueue
-    window.automaticPlayQueue.splice(window.maxFilesInAutomaticQueue)
-  }
-  setPlayQueueImages()
-}
-
 // implementation of fisher–yates algorithm for shuffle https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
 function shuffleArray (array) {
   let currentIndex = array.length
@@ -957,47 +1042,6 @@ function shuffleArray (array) {
   }
 
   return array
-}
-
-function toggleRepeat () {
-  clearPlayQueueImages()
-  if (!window.repeat) {
-    window.repeat = 'set'
-    document.querySelector('#repeatButton svg.repeat').style.display = 'inline'
-    document.querySelector('#repeatButton svg.repeat-1').style.display = 'none'
-    document.querySelector('#repeatButton svg.repeat').setAttribute('fill', window.accentColor)
-    document.querySelector('#repeatButton').classList.add('active')
-
-    // take snapshot of automatic queue
-    if (window.currentFile) window.automaticPlayQueueSnapshot = [window.currentFile, ...window.automaticPlayQueue]
-    else { // there is no automatic queue
-      // use currently visible files in the table if there is no automatic queue yet
-      const rows = window.table.getRows('active').slice(0, window.maxFilesInAutomaticQueue)
-      const filePaths = rows.map(row => row.getData().file_path)
-      window.automaticPlayQueueSnapshot = [...filePaths]
-    }
-
-    // repeat set repeats whatever is in the play queue
-    addNextFilesToAutomaticPlayQueue()
-  } else if (window.repeat === 'set') {
-    window.repeat = 'file'
-    document.querySelector('#repeatButton svg.repeat').style.display = 'none'
-    document.querySelector('#repeatButton svg.repeat-1').style.display = 'inline'
-    document.querySelector('#repeatButton svg.repeat-1').setAttribute('fill', window.accentColor)
-    document.querySelector('#repeatButton').classList.add('active')
-
-    // clear automatic play queue from previous set
-    addNextFilesToAutomaticPlayQueue()
-  } else if (window.repeat === 'file') {
-    window.repeat = null
-    document.querySelector('#repeatButton svg.repeat').style.display = 'inline'
-    document.querySelector('#repeatButton svg.repeat-1').style.display = 'none'
-    document.querySelector('#repeatButton svg.repeat').setAttribute('fill', '#000')
-    document.querySelector('#repeatButton').classList.remove('active')
-    window.automaticPlayQueue = []
-    addNextFilesToAutomaticPlayQueue()
-  }
-  setPlayQueueImages()
 }
 
 function previousFile () {
