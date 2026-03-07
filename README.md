@@ -5,7 +5,7 @@
 <h3>A free, cross-platform music player by <a href="https://otherworldly.media">Otherworldly Media</a>.</h3>
 </div>
 
-![Fanfare screenshot](./screenshots/fanfare.png)
+![Fanfare screenshot](./images/fanfare.png)
 
 ## Project status
 

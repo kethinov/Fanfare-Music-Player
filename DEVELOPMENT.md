@@ -22,3 +22,5 @@ Except in special cases, the app uses [FFmpeg](https://ffmpeg.org) to convert au
 Special cases:
 
 - [SPC](https://wiki.superfamicom.org/spc-and-rsn-file-format): Decoded into PCM audio by a bundled WebAssembly player.
+
+![Fanfare will play anything meme](./images/fanfare_will_play_anything.jpg)
